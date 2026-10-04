@@ -52,6 +52,7 @@ pub enum Kind:
 
 ## A file's kind and its images.
 pub struct Info:
+    ## An icon (type 1) or a cursor (type 2).
     pub var kind: Kind = Kind.icon
     ## The directory entries the file holds in full (the count it gives, unless the file
     ## ends inside the directory).

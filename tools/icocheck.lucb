@@ -1,0 +1,104 @@
+#==============================================================================================
+#
+#   tools/icocheck - Read a list of ICO and CUR files, decoding every entry
+#
+#   DESCRIPTION:
+#       The Luce half of the conformance runner (conformance.py) and the fuzzer
+#       (fuzz.py). Usage: `icocheck LIST OUTDIR`. Each line of LIST is `FLAGS PATH`, FLAGS
+#       a word of letters (or `-` for none): `q` decodes without writing anything (the
+#       fuzzer's runs), `s` lowers the pixel limit to 4 megapixels. For the Nth line it
+#       prints `N ok KIND COUNT LARGEST CLOSEST32` (KIND icon or cursor, then the entries
+#       `choose` picks for the largest and for 32 pixels) and, for each entry I,
+#       `N entry I WIDTH HEIGHT LISTEDW LISTEDH BITS FORMAT HOTX HOTY RESULT`: FORMAT png
+#       or bmp, RESULT ok or the error's code. A BMP entry's pixels go to
+#       OUTDIR/N-I.rgba, a PNG entry's bytes to OUTDIR/N-I.png. A file that cannot be
+#       read prints `N error CODE MESSAGE`.
+#
+#==============================================================================================
+
+import io
+import memory
+import ico
+import disk
+
+extern func fflush(file: void*?) -> i32
+
+## A file of the list cannot be read.
+let missing: ErrorCode = ErrorCode.package(100)
+
+## The name of a failure's code.
+func code_name(code: ErrorCode) -> str:
+    if code == ico.corrupt:
+        return "corrupt"
+    if code == ico.png:
+        return "png"
+    if code == ico.limit:
+        return "limit"
+    if code == ico.invalid:
+        return "invalid"
+    if code == ico.unsupported:
+        return "unsupported"
+    if code == missing:
+        return "missing"
+    return "other"
+
+## Decode the file of one job and report it.
+func run_job(number: usize, job: disk.Job, directory: str) -> !:
+    let data = disk.read_file(job.path) else error(missing, "cannot read the file")
+    defer free(data) in memory.heap
+    var options = ico.Options()
+    if disk.has(job.flags, 's'):
+        options.max_pixels = 4194304
+    let quiet = disk.has(job.flags, 'q')
+    let found = try ico.info(data)
+    let largest = try ico.choose(data)
+    let closest = try ico.choose(data, 32)
+    let out = io.stdout()
+    let kind = "icon" if found.kind == ico.Kind.icon else "cursor"
+    discard(try out.write(f"{number} ok {kind} {found.count} {largest.index} {closest.index}\n"))
+    for index in 0..<found.count:
+        let item = try ico.entry_at(data, index)
+        let format_name = "png" if item.png else "bmp"
+        discard(try out.write(f"{number} entry {index} {item.width} {item.height} {item.listed_width} {item.listed_height} {item.bits} {format_name} "))
+        discard(try out.write(f"{item.hotspot_x} {item.hotspot_y} "))
+        if item.png:
+            discard(try out.write("ok\n"))
+            if not quiet:
+                try write_output(directory, f"/{number}-{index}.png", ico.image(data, &item))
+            continue
+        if item.width == 0 or item.height > options.max_pixels // item.width:
+            discard(try out.write("limit\n"))
+            continue
+        let pixels = try new u8[item.width * item.height * 4] in memory.heap
+        defer free(pixels) in memory.heap
+        ico.decode_rgba8(data, &item, pixels, options) catch failure:
+            discard(try out.write(f"{code_name(failure.code)}\n"))
+            continue
+        discard(try out.write("ok\n"))
+        if not quiet:
+            try write_output(directory, f"/{number}-{index}.rgba", pixels)
+
+## Write `data` to the file `name` (formatted) in `directory`.
+func write_output(directory: str, name: fmt, data: const u8[]) -> !:
+    var digits: u8[64]
+    let file = try format(digits, name)
+    var target = disk.Buffer()
+    defer target.release()
+    try target.add_all(directory.bytes)
+    try target.add_all(file.bytes)
+    try disk.write_file((str)target.view(), data)
+
+pub func main(arguments: str[]) -> i32!:
+    if arguments.length < 3:
+        print("usage: icocheck LIST OUTDIR")
+        return 2
+    let list = disk.read_file(arguments[1]) else error(memory.exhausted, "cannot read the list")
+    defer free(list) in memory.heap
+    var jobs = disk.Jobs.over(list)
+    var number: usize = 0
+    while let job = jobs.next():
+        run_job(number, job, arguments[2]) catch failure:
+            print(f"{number} error {code_name(failure.code)} {failure.message}")
+        discard(fflush(none))
+        number += 1
+    return 0

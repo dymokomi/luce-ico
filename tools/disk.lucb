@@ -1,0 +1,135 @@
+#==============================================================================================
+#
+#   tools/disk - Whole files in and out, and a list of jobs, for the tools
+#
+#   DESCRIPTION:
+#       The tools read a list of files to decode and write what they decoded beside a
+#       report, through the C library's stdio: `read_file`, `write_file`, and `Jobs`,
+#       which splits a list's lines into a flags word and a path.
+#
+#==============================================================================================
+
+import c
+import memory
+
+extern func fopen(path: c.str, mode: c.str) -> void*?
+extern func fclose(file: void*) -> i32
+extern func fread(data: void*, size: usize, count: usize, file: void*) -> usize
+extern func fwrite(data: const void*, size: usize, count: usize, file: void*) -> usize
+
+# mark: Files =================================================================================
+
+## A growable byte buffer on the heap.
+pub struct Buffer:
+    var items: u8[]
+    pub var used: usize = 0
+
+    ## Append `data`.
+    pub mutating func add_all(data: const u8[]) -> !:
+        if self.used + data.length > self.items.length:
+            var size = 256 if self.items.length == 0 else self.items.length * 2
+            while size < self.used + data.length:
+                size *= 2
+            let larger = try alloc u8[size] in memory.heap
+            memory.copy(larger, self.items, self.used)
+            if self.items.length > 0:
+                free(self.items) in memory.heap
+            self.items = larger
+        memory.copy(self.items[self.used..], data, data.length)
+        self.used += data.length
+
+    ## The bytes in use.
+    pub func view() -> u8[]:
+        return self.items[..<self.used]
+
+    ## Free the bytes; the buffer is empty afterwards.
+    pub mutating func release():
+        if self.items.length > 0:
+            free(self.items) in memory.heap
+        var empty: u8[]
+        self.items = empty
+        self.used = 0
+
+## `path` with a NUL after it, in `name`, as C wants it.
+func c_path(path: str, name: Buffer*) -> c.str!:
+    try name.add_all(path.bytes)
+    var nul: u8[1]
+    try name.add_all(nul)
+    return (c.str)(str)name.view()
+
+## The bytes of the file at `path` on the heap, or none if it cannot be read.
+pub func read_file(path: str) -> u8[]?:
+    var name = Buffer()
+    defer name.release()
+    let text = c_path(path, &name) else return none
+    let file = fopen(text, "rb") else return none
+    defer discard(fclose(file))
+    var contents = Buffer()
+    defer contents.release()
+    var chunk: u8[65536]
+    while true:
+        let count = fread(&chunk[0], 1, 65536, file)
+        if count == 0:
+            break
+        contents.add_all(chunk[..<count]) catch failure:
+            discard(failure)
+            return none
+    let exact = (alloc u8[contents.used] in memory.heap) else return none
+    memory.copy(exact, contents.items, contents.used)
+    return exact
+
+## Write `data` to the file at `path`.
+pub func write_file(path: str, data: const u8[]) -> !:
+    var name = Buffer()
+    defer name.release()
+    let file = fopen(try c_path(path, &name), "wb") else error(memory.exhausted, "cannot write a file")
+    if data.length > 0:
+        discard(fwrite(&data[0], 1, data.length, file))
+    discard(fclose(file))
+
+# mark: Job lists =============================================================================
+
+## One line of a job list: `FLAGS PATH`.
+pub struct Job:
+    pub var flags: str
+    pub var path: str
+
+## The lines of a job list, one `Job` at a time.
+pub struct Jobs:
+    var list: const u8[]
+    var at: usize = 0
+
+    ## The jobs of `list`.
+    pub static func over(list: const u8[]) -> Jobs:
+        return Jobs(list = list)
+
+    ## The next job, or none after the last.
+    pub mutating func next() -> Job?:
+        while self.at < self.list.length:
+            var end = self.at
+            while end < self.list.length and self.list[end] != '\n':
+                end += 1
+            let line = self.list[self.at..<end]
+            self.at = end + 1
+            var space: usize = 0
+            while space < line.length and line[space] != ' ':
+                space += 1
+            if space < line.length:
+                return Job(flags = (str)line[..<space], path = (str)line[space + 1..])
+        return none
+
+## Whether `flags` has the letter `flag`.
+pub func has(flags: str, flag: u8) -> bool:
+    for letter in flags.bytes:
+        if letter == flag:
+            return true
+    return false
+
+## Whether `a` and `b` hold the same bytes.
+pub func same(a: const u8[], b: const u8[]) -> bool:
+    if a.length != b.length:
+        return false
+    for index in 0..<a.length:
+        if a[index] != b[index]:
+            return false
+    return true
