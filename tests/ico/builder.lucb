@@ -1,0 +1,128 @@
+#==============================================================================================
+#
+#   tests/ico/builder - Writing small icons and cursors for the tests
+#
+#   DESCRIPTION:
+#       An `Icon` writes an ICO or CUR file into a fixed buffer: the header, directory
+#       entries whose size and offset are filled in as their images are appended, and
+#       images: 32-bit BMP DIBs of one colour with an AND mask, or the head of a PNG (its
+#       signature and IHDR chunk), which is all the decoder reads of one.
+#
+#==============================================================================================
+
+# mark: The builder ===========================================================================
+
+## An icon or cursor written into a fixed buffer.
+struct Icon:
+    var bytes: u8[65536]
+    var used: usize
+
+    ## The file so far.
+    func data() -> const u8[]:
+        return self.bytes[..<self.used]
+
+    mutating func add(byte: u8):
+        self.bytes[self.used] = byte
+        self.used += 1
+
+    mutating func add_all(data: const u8[]):
+        for byte in data:
+            self.add(byte)
+
+    mutating func word(value: usize):
+        self.add((u8)(value & 0xFF))
+        self.add((u8)((value >> 8) & 0xFF))
+
+    mutating func long(value: usize):
+        self.word(value & 0xFFFF)
+        self.word(value >> 16)
+
+    ## Append `data` `count` times.
+    mutating func repeat(data: const u8[], count: usize):
+        var left = count
+        while left > 0:
+            self.add_all(data)
+            left -= 1
+
+    ## Overwrite the little-endian 32-bit number at `at`.
+    mutating func put_long(at: usize, value: usize):
+        self.bytes[at] = (u8)(value & 0xFF)
+        self.bytes[at + 1] = (u8)((value >> 8) & 0xFF)
+        self.bytes[at + 2] = (u8)((value >> 16) & 0xFF)
+        self.bytes[at + 3] = (u8)((value >> 24) & 0xFF)
+
+    ## The header: type 1 for an icon, 2 for a cursor.
+    mutating func header(kind: usize, count: usize):
+        self.word(0)
+        self.word(kind)
+        self.word(count)
+
+    ## A directory entry; `planes` and `bits` are a cursor's hotspot x and y. Its size
+    ## and offset are filled in by the image appended for it.
+    mutating func entry(width: u8, height: u8, planes: usize = 1, bits: usize = 32):
+        self.add(width)
+        self.add(height)
+        self.add(0)
+        self.add(0)
+        self.word(planes)
+        self.word(bits)
+        self.long(0)
+        self.long(0)
+
+    ## Start entry `index`'s image here.
+    mutating func begin(index: usize):
+        self.put_long(6 + index * 16 + 12, self.used)
+
+    ## End entry `index`'s image here, recording its size.
+    mutating func end(index: usize):
+        let start = (usize)self.bytes[6 + index * 16 + 12] | ((usize)self.bytes[6 + index * 16 + 13] << 8)
+        self.put_long(6 + index * 16 + 8, self.used - start)
+
+    ## A 32-bit DIB for entry `index`: every pixel `blue`, `green`, `red` and `alpha`,
+    ## every mask byte `mask`.
+    mutating func dib(index: usize, width: usize, height: usize, red: u8, green: u8, blue: u8, alpha: u8 = 0, mask: u8 = 0):
+        self.begin(index)
+        self.long(40)
+        self.long(width)
+        self.long(height * 2)
+        self.word(1)
+        self.word(32)
+        self.repeat(b"\x00\x00\x00\x00", 6)
+        let pixel: u8[4] = [blue, green, red, alpha]
+        self.repeat(pixel, width * height)
+        let row: u8[1] = [mask]
+        self.repeat(row, (width + 31) // 32 * 4 * height)
+        self.end(index)
+
+    ## The head of a PNG for entry `index`: signature and IHDR, 8 bits a sample, colour
+    ## type `color` (6 RGBA, 2 RGB).
+    mutating func png_head(index: usize, width: usize, height: usize, color: u8 = 6):
+        self.begin(index)
+        self.add_all(b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR")
+        let sizes: usize[2] = [width, height]
+        for value in sizes:
+            self.add((u8)(value >> 24))
+            self.add((u8)((value >> 16) & 0xFF))
+            self.add((u8)((value >> 8) & 0xFF))
+            self.add((u8)(value & 0xFF))
+        self.add(8)
+        self.add(color)
+        self.add_all(b"\x00\x00\x00\x00\x00\x00\x00")
+        self.end(index)
+
+# mark: Helpers ===============================================================================
+
+## The RGBA pixel at `x`, `y` of a `width`-wide picture, as one number 0xRRGGBBAA.
+func rgba_at(canvas: const u8[], width: usize, x: usize, y: usize) -> u32:
+    let at = (y * width + x) * 4
+    return ((u32)canvas[at] << 24) | ((u32)canvas[at + 1] << 16) | ((u32)canvas[at + 2] << 8) | (u32)canvas[at + 3]
+
+## An icon of three images: 16x16 red, 32x32 green (with alpha), 32x32 PNG.
+func three_sizes(icon: Icon*):
+    icon.header(1, 3)
+    icon.entry(16, 16)
+    icon.entry(32, 32)
+    icon.entry(32, 32, bits = 24)
+    icon.dib(0, 16, 16, 255, 0, 0)
+    icon.dib(1, 32, 32, 0, 255, 0, alpha = 0x80)
+    icon.png_head(2, 32, 32)

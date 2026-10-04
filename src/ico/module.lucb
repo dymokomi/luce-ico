@@ -1,0 +1,140 @@
+#==============================================================================================
+#
+#   ico - ICO and CUR decoding: the directory, choosing an entry, BMP and PNG entries
+#
+#   DESCRIPTION:
+#       An ICO (or CUR, a cursor) file is a directory of images, each a bare BMP DIB
+#       with an AND mask after it (decoded here through luce-bmp) or a whole PNG (handed
+#       back to the caller, who decodes it with a PNG decoder). `info` reads the
+#       directory; `entry_at` describes one image, its size read from the image's own
+#       header where it can be (directories lie: 0 means 256, and some list sizes the
+#       images do not have); `choose` picks the largest image, or the one closest to a
+#       requested size; `image` answers an entry's bytes and `decode_rgba8` decodes a BMP
+#       entry to straight RGBA. Cursors carry their hotspot in each entry.
+#
+#       Damaged files go as far as they can: directory entries the file cuts off are
+#       dropped, an image cut short decodes the rows it holds (as luce-bmp decodes them),
+#       and an entry whose image lies outside the file fails only when it is decoded.
+#
+#       Fragments, in ORDER:
+#
+#       module.lucb      the public API: errors, Info, Entry, Options, decoding
+#       directory.lucb   reading the directory and the images' own headers, choosing
+#
+#==============================================================================================
+
+from luce_bmp import bmp
+
+# mark: Errors ================================================================================
+
+## The bytes are not an ICO or CUR file, or the entry asked for is damaged beyond use.
+pub let corrupt: ErrorCode = ErrorCode.package(1)
+
+## The entry holds a PNG: its bytes (`image`) decode with a PNG decoder, not here.
+pub let png: ErrorCode = ErrorCode.package(2)
+
+## A limit in `Options` was reached: the image has more pixels than `max_pixels`.
+pub let limit: ErrorCode = ErrorCode.package(3)
+
+## The caller's request cannot be met: an entry index past the last, an output buffer
+## too small.
+pub let invalid: ErrorCode = ErrorCode.package(4)
+
+## The entry's BMP is valid but in a form luce-bmp does not decode.
+pub let unsupported: ErrorCode = ErrorCode.package(5)
+
+# mark: Information ===========================================================================
+
+## Icon or cursor.
+pub enum Kind:
+    icon
+    cursor
+
+## A file's kind and its images.
+pub struct Info:
+    pub var kind: Kind = Kind.icon
+    ## The directory entries the file holds in full (the count it gives, unless the file
+    ## ends inside the directory).
+    pub var count: usize
+
+## One image of the directory.
+pub struct Entry:
+    ## Its position in the directory.
+    pub var index: usize
+    ## Its size in pixels, from the image's own header; the listed size when that
+    ## header cannot be read.
+    pub var width: usize
+    pub var height: usize
+    ## The size the directory lists (a listed 0 is 256).
+    pub var listed_width: usize
+    pub var listed_height: usize
+    ## Bits a pixel, from the image's header (a PNG's bit depth times its channels), or
+    ## as the directory lists it for an icon.
+    pub var bits: usize
+    ## The image is a PNG (decode `image`'s bytes with a PNG decoder), not a BMP.
+    pub var png: bool
+    ## The image's own header could be read and gives the size the directory lists: it
+    ## may decode. An entry that is not readable fails to decode.
+    pub var readable: bool
+    ## A cursor's hotspot, from the image's top left; 0 for an icon.
+    pub var hotspot_x: usize
+    pub var hotspot_y: usize
+    ## Where the image's bytes are in the file, and how many the directory gives.
+    var offset: usize
+    var size: usize
+
+## How a decode runs.
+pub struct Options:
+    ## The most pixels an image may have.
+    pub var max_pixels: usize = 268435456
+
+# mark: Decoding ==============================================================================
+
+## The kind and entry count of the ICO or CUR file in `data`.
+pub func info(data: const u8[]) -> Info!:
+    return try read_header(data)
+
+## Entry `index` of the directory.
+pub func entry_at(data: const u8[], index: usize) -> Entry!:
+    let found = try read_header(data)
+    if index >= found.count:
+        error(invalid, "ICO entry index is past the last entry")
+    return read_entry(data, found.kind, index)
+
+## The entry to show: with `size` 0 the largest image, else the smallest at least `size`
+## pixels wide (the largest when none is); ties go to more bits a pixel, then to the
+## earlier entry. Images whose headers cannot be read are chosen last.
+pub func choose(data: const u8[], size: usize = 0) -> Entry!:
+    let found = try read_header(data)
+    var best = read_entry(data, found.kind, 0)
+    for index in 1..<found.count:
+        let candidate = read_entry(data, found.kind, index)
+        if better(&candidate, &best, size):
+            best = candidate
+    return best
+
+## The bytes of `entry`'s image: a PNG, or a BMP DIB with its AND mask. Cut short when
+## the file is.
+pub func image(data: const u8[], entry: const Entry*) -> const u8[]:
+    let start = least(entry.offset, data.length)
+    return data[start..<start + least(entry.size, data.length - start)]
+
+## Decode `entry`'s BMP image into `out`, `entry.width * entry.height * 4` bytes of
+## straight RGBA, its AND mask applied. The DIB is read from the entry's offset to the
+## end of the file, as far as its own header says. Fails with `png` for a PNG entry.
+pub func decode_rgba8(data: const u8[], entry: const Entry*, out: u8[], options: Options = Options()) -> !:
+    if entry.png:
+        error(png, "ICO entry is a PNG: decode its image bytes with a PNG decoder")
+    if entry.offset >= data.length:
+        error(corrupt, "ICO entry's image is outside the file")
+    if not entry.readable:
+        error(corrupt, "ICO entry's image is damaged or not the size the directory lists")
+    let dib = bmp.Options(max_pixels = options.max_pixels, icon = true)
+    bmp.decode_dib_rgba8(data[entry.offset..], out, dib) catch failure:
+        if failure.code == bmp.limit:
+            error(limit, "ICO image has more pixels than allowed")
+        if failure.code == bmp.invalid:
+            error(invalid, "ICO output buffer is smaller than the image")
+        if failure.code == bmp.unsupported:
+            error(unsupported, failure.message)
+        error(corrupt, failure.message)

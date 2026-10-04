@@ -1,0 +1,93 @@
+#==============================================================================================
+#
+#   tests/ico/directory - The header, the entries, hotspots and choosing
+#
+#==============================================================================================
+
+test "info reads the kind and the count":
+    var icon = Icon()
+    three_sizes(&icon)
+    let found = try info(icon.data())
+    assert(found.kind == Kind.icon and found.count == 3)
+
+test "entries read their sizes and bits from their own images":
+    var icon = Icon()
+    three_sizes(&icon)
+    let small = try entry_at(icon.data(), 0)
+    assert(small.width == 16 and small.height == 16 and small.bits == 32 and not small.png and small.readable)
+    let picture = try entry_at(icon.data(), 2)
+    assert(picture.png and picture.width == 32 and picture.bits == 32 and picture.readable)
+    assert(picture.listed_width == 32 and picture.hotspot_x == 0)
+    var failed = false
+    discard(entry_at(icon.data(), 3) catch failure:
+        failed = failure.code == invalid
+        recover small)
+    assert(failed)
+
+test "a listed size of 0 means 256":
+    var icon = Icon()
+    icon.header(1, 1)
+    icon.entry(0, 0)
+    icon.png_head(0, 256, 256)
+    let item = try entry_at(icon.data(), 0)
+    assert(item.listed_width == 256 and item.listed_height == 256 and item.width == 256 and item.readable)
+
+test "a cursor's entries carry their hotspots":
+    var cursor = Icon()
+    cursor.header(2, 1)
+    cursor.entry(4, 4, planes = 3, bits = 1)
+    cursor.dib(0, 4, 4, 0, 0, 0)
+    let found = try info(cursor.data())
+    assert(found.kind == Kind.cursor)
+    let item = try entry_at(cursor.data(), 0)
+    assert(item.hotspot_x == 3 and item.hotspot_y == 1 and item.bits == 32)
+
+## Whether `info` refuses `data` as corrupt.
+func refused(data: const u8[]) -> bool:
+    discard(info(data) catch failure:
+        return failure.code == corrupt)
+    return false
+
+test "files that are not icons are refused":
+    assert(refused(b"\x89PNG\r\n\x1a\n"))
+    assert(refused(b"\x00\x00\x03\x00\x01\x00"))
+    assert(refused(b"\x01\x00\x01\x00\x01\x00"))
+    assert(refused(b"\x00\x00\x01\x00\x00\x00"))
+    assert(refused(b"\x00\x00\x01"))
+
+test "a directory cut short keeps the entries it holds":
+    var icon = Icon()
+    icon.header(1, 5)
+    icon.entry(16, 16)
+    icon.entry(16, 16)
+    let found = try info(icon.data())
+    assert(found.count == 2)
+
+test "choose picks the largest, or the smallest that is big enough":
+    var icon = Icon()
+    three_sizes(&icon)
+    let largest = try choose(icon.data())
+    assert(largest.index == 1)
+    let small = try choose(icon.data(), 16)
+    assert(small.index == 0)
+    let middle = try choose(icon.data(), 20)
+    assert(middle.index == 1)
+    let huge = try choose(icon.data(), 512)
+    assert(huge.index == 1)
+
+test "choose prefers more bits, then readable images":
+    var icon = Icon()
+    icon.header(1, 3)
+    icon.entry(16, 16)
+    icon.entry(16, 16)
+    icon.entry(64, 64)
+    icon.png_head(0, 16, 16, color = 2)
+    icon.dib(1, 16, 16, 0, 0, 0)
+    # The third lists 64x64 but holds a 16x16 image: not readable, chosen last.
+    icon.dib(2, 16, 16, 0, 0, 0)
+    let first = try entry_at(icon.data(), 0)
+    assert(first.bits == 24)
+    let best = try choose(icon.data())
+    assert(best.index == 1)
+    let third = try entry_at(icon.data(), 2)
+    assert(not third.readable and third.width == 16)

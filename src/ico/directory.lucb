@@ -1,0 +1,127 @@
+#==============================================================================================
+#
+#   ico/directory - Reading the directory and the images' own headers, choosing
+#
+#   DESCRIPTION:
+#       The file begins with six bytes, a reserved zero, the type (1 icon, 2 cursor) and
+#       the image count, then sixteen bytes an image: width and height (0 meaning 256),
+#       palette colours, a reserved byte, the colour planes and bits a pixel (for a
+#       cursor, the hotspot's x and y instead), the image's size and its offset. Each
+#       image is a PNG, known by its signature, or a BMP DIB. An entry's size is read
+#       from the PNG's IHDR or the DIB's info header where it can be, and must be the
+#       size the directory lists (as Firefox and Ladybird require) for the entry to be
+#       readable; the BMP is read from its offset to the end of the file, since some
+#       directories give it too few bytes for its mask.
+#
+#==============================================================================================
+
+# mark: Reading ===============================================================================
+
+## The little-endian 16-bit number at `at` of `data`.
+func word(data: const u8[], at: usize) -> usize:
+    return (usize)data[at] | ((usize)data[at + 1] << 8)
+
+## The little-endian 32-bit number at `at` of `data`.
+func long(data: const u8[], at: usize) -> usize:
+    return word(data, at) | (word(data, at + 2) << 16)
+
+## The big-endian 32-bit number at `at` of `data`, as PNG writes them.
+func big(data: const u8[], at: usize) -> usize:
+    return ((usize)data[at] << 24) | ((usize)data[at + 1] << 16) | ((usize)data[at + 2] << 8) | (usize)data[at + 3]
+
+## The lesser of `a` and `b`.
+func least(a: usize, b: usize) -> usize:
+    return a if a < b else b
+
+## PNG's signature.
+let png_signature = b"\x89PNG\r\n\x1a\n"
+
+## Whether `data` begins with the bytes `prefix`.
+func starts(data: const u8[], prefix: const u8[]) -> bool:
+    if data.length < prefix.length:
+        return false
+    for index in 0..<prefix.length:
+        if data[index] != prefix[index]:
+            return false
+    return true
+
+# mark: The directory =========================================================================
+
+## The file's header: its kind and how many directory entries it holds in full.
+func read_header(data: const u8[]) -> Info!:
+    if data.length < 6 or word(data, 0) != 0:
+        error(corrupt, "not an ICO or CUR file")
+    let kind = word(data, 2)
+    if kind != 1 and kind != 2:
+        error(corrupt, "not an ICO or CUR file: unknown type")
+    let count = least(word(data, 4), (data.length - 6) // 16)
+    if count == 0:
+        error(corrupt, "ICO file has no images")
+    return Info(kind = Kind.icon if kind == 1 else Kind.cursor, count = count)
+
+## Directory entry `index`, which the file holds, with what its image's header says.
+func read_entry(data: const u8[], kind: Kind, index: usize) -> Entry:
+    let at = 6 + index * 16
+    let listed_width: usize = 256 if data[at] == 0 else (usize)data[at]
+    let listed_height: usize = 256 if data[at + 1] == 0 else (usize)data[at + 1]
+    var item = Entry(index = index, width = listed_width, height = listed_height, listed_width = listed_width, listed_height = listed_height,
+                     offset = long(data, at + 12), size = long(data, at + 8))
+    if kind == Kind.cursor:
+        item.hotspot_x = word(data, at + 4)
+        item.hotspot_y = word(data, at + 6)
+    else:
+        item.bits = word(data, at + 6)
+    if item.offset >= data.length:
+        return item
+    let bytes = data[item.offset..]
+    if starts(bytes, png_signature):
+        item.png = true
+        if bytes.length >= 26 and starts(bytes[12..], b"IHDR"):
+            item.width = big(bytes, 16)
+            item.height = big(bytes, 20)
+            item.bits = (usize)bytes[24] * png_channels(bytes[25])
+            item.readable = listed(&item)
+        return item
+    let dib = bmp.info_dib(bytes, bmp.Options(icon = true)) catch failure:
+        discard(failure)
+        return item
+    item.width = dib.width
+    item.height = dib.height
+    item.bits = dib.bits
+    item.readable = listed(&item)
+    return item
+
+## Whether an entry's image has the size the directory lists, as Firefox and Ladybird
+## require: the same, or at least 256 where the directory says 256 (0).
+func listed(item: const Entry*) -> bool:
+    let width_ok = item.width == item.listed_width or (item.listed_width == 256 and item.width > 256)
+    let height_ok = item.height == item.listed_height or (item.listed_height == 256 and item.height > 256)
+    return width_ok and height_ok
+
+## The channels of PNG colour type `color`.
+func png_channels(color: u8) -> usize:
+    return match color:
+        2 => 3
+        4 => 2
+        6 => 4
+        _ => 1
+
+# mark: Choosing ==============================================================================
+
+## Whether `candidate` suits a request for `size` pixels (0 for the largest) better than
+## `best`.
+func better(candidate: const Entry*, best: const Entry*, size: usize) -> bool:
+    if candidate.readable != best.readable:
+        return candidate.readable
+    if size == 0:
+        let area = candidate.width *| candidate.height
+        let best_area = best.width *| best.height
+        if area != best_area:
+            return area > best_area
+    else:
+        let fits = candidate.width >= size
+        if fits != (best.width >= size):
+            return fits
+        if candidate.width != best.width:
+            return candidate.width < best.width if fits else candidate.width > best.width
+    return candidate.bits > best.bits

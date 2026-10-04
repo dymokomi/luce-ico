@@ -1,0 +1,16 @@
+#prisma 4.0
+def package "luce-ico" {
+    str owner = "dymokomi"
+    str version = "0.1.0"
+    str kind = "package"
+    str language = "luce-base"
+    str description = "An ICO and CUR decoder for Luce/Base: the directory, choosing an entry, BMP entries with their masks, PNG entries handed back, cursor hotspots."
+    str readme = "README.md"
+    str[] public = ["ico"]
+
+    def dependency "luce-bmp" {
+        str owner = "dymokomi"
+        str version = "^0.1.0"
+        str path = "../luce-bmp"
+    }
+}

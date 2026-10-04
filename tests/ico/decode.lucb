@@ -1,0 +1,103 @@
+#==============================================================================================
+#
+#   tests/ico/decode - BMP entries decoded with their masks, PNG entries handed back
+#
+#==============================================================================================
+
+test "a BMP entry decodes with its AND mask":
+    var icon = Icon()
+    icon.header(1, 1)
+    icon.entry(2, 2)
+    # Mask byte 0x80: the first pixel of every row is clear.
+    icon.dib(0, 2, 2, 255, 0, 0, mask = 0x80)
+    let item = try entry_at(icon.data(), 0)
+    var out: u8[16]
+    try decode_rgba8(icon.data(), &item, out)
+    assert(rgba_at(out, 2, 0, 0) == 0 and rgba_at(out, 2, 1, 0) == 0xFF0000FF)
+    assert(rgba_at(out, 2, 0, 1) == 0 and rgba_at(out, 2, 1, 1) == 0xFF0000FF)
+
+test "a 32-bit entry with alpha keeps its alpha and ignores its mask":
+    var icon = Icon()
+    three_sizes(&icon)
+    let item = try entry_at(icon.data(), 1)
+    let pixels = try new u8[32 * 32 * 4]
+    defer free(pixels)
+    try decode_rgba8(icon.data(), &item, pixels)
+    assert(rgba_at(pixels, 32, 0, 0) == 0x00FF0080 and rgba_at(pixels, 32, 31, 31) == 0x00FF0080)
+
+test "a PNG entry is handed back, not decoded":
+    var icon = Icon()
+    three_sizes(&icon)
+    let item = try entry_at(icon.data(), 2)
+    let bytes = image(icon.data(), &item)
+    assert(bytes.length == 33 and bytes[0] == 0x89 and bytes[1] == 'P')
+    let pixels = try new u8[32 * 32 * 4]
+    defer free(pixels)
+    var failed = false
+    decode_rgba8(icon.data(), &item, pixels) catch failure:
+        failed = failure.code == png
+    assert(failed)
+
+test "an entry that is not the size the directory lists does not decode":
+    var icon = Icon()
+    icon.header(1, 1)
+    icon.entry(8, 8)
+    icon.dib(0, 2, 2, 255, 0, 0)
+    let item = try entry_at(icon.data(), 0)
+    assert(not item.readable and item.width == 2)
+    var out: u8[256]
+    var failed = false
+    decode_rgba8(icon.data(), &item, out) catch failure:
+        failed = failure.code == corrupt
+    assert(failed)
+
+test "an entry outside the file does not decode":
+    var icon = Icon()
+    icon.header(1, 1)
+    icon.entry(2, 2)
+    icon.put_long(18, 60000)
+    let item = try entry_at(icon.data(), 0)
+    assert(not item.readable)
+    var out: u8[16]
+    var failed = false
+    decode_rgba8(icon.data(), &item, out) catch failure:
+        failed = failure.code == corrupt
+    assert(failed)
+
+test "a directory that gives an image too few bytes still finds its mask":
+    var icon = Icon()
+    icon.header(1, 1)
+    icon.entry(2, 2)
+    icon.dib(0, 2, 2, 0, 0, 255, mask = 0x40)
+    icon.put_long(14, 56)
+    let item = try entry_at(icon.data(), 0)
+    assert(image(icon.data(), &item).length == 56)
+    var out: u8[16]
+    try decode_rgba8(icon.data(), &item, out)
+    assert(rgba_at(out, 2, 0, 0) == 0x0000FFFF and rgba_at(out, 2, 1, 0) == 0)
+
+test "an image cut short decodes the rows it holds":
+    var icon = Icon()
+    icon.header(1, 1)
+    icon.entry(2, 2)
+    icon.dib(0, 2, 2, 0, 255, 0)
+    let cut = icon.data()[..<22 + 40 + 8]
+    let item = try entry_at(cut, 0)
+    var out: u8[16]
+    try decode_rgba8(cut, &item, out)
+    assert(rgba_at(out, 2, 0, 1) == 0x00FF00FF and rgba_at(out, 2, 0, 0) == 0)
+
+test "an output buffer too small, or an image over the limit, is refused":
+    var icon = Icon()
+    three_sizes(&icon)
+    let item = try entry_at(icon.data(), 0)
+    var small: u8[16]
+    var failed = false
+    decode_rgba8(icon.data(), &item, small) catch failure:
+        failed = failure.code == invalid
+    assert(failed)
+    var out: u8[1024]
+    failed = false
+    decode_rgba8(icon.data(), &item, out, Options(max_pixels = 100)) catch failure:
+        failed = failure.code == limit
+    assert(failed)
