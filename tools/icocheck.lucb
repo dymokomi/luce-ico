@@ -20,6 +20,7 @@ import io
 import memory
 import ico
 import disk
+import strings
 
 extern func fflush(file: void*?) -> i32
 
@@ -55,33 +56,33 @@ func run_job(number: usize, job: disk.Job, directory: str) -> !:
     let closest = try ico.choose(data, 32)
     let out = io.stdout()
     let kind = "icon" if found.kind == ico.Kind.icon else "cursor"
-    discard(try out.write(f"{number} ok {kind} {found.count} {largest.index} {closest.index}\n"))
+    _ = try out.write(f"{number} ok {kind} {found.count} {largest.index} {closest.index}\n")
     for index in 0..<found.count:
         let item = try ico.entry_at(data, index)
         let format_name = "png" if item.png else "bmp"
-        discard(try out.write(f"{number} entry {index} {item.width} {item.height} {item.listed_width} {item.listed_height} {item.bits} {format_name} "))
-        discard(try out.write(f"{item.hotspot_x} {item.hotspot_y} "))
+        _ = try out.write(f"{number} entry {index} {item.width} {item.height} {item.listed_width} {item.listed_height} {item.bits} {format_name} ")
+        _ = try out.write(f"{item.hotspot_x} {item.hotspot_y} ")
         if item.png:
-            discard(try out.write("ok\n"))
+            _ = try out.write("ok\n")
             if not quiet:
                 try write_output(directory, f"/{number}-{index}.png", ico.image(data, &item))
             continue
         if item.width == 0 or item.height > options.max_pixels // item.width:
-            discard(try out.write("limit\n"))
+            _ = try out.write("limit\n")
             continue
         let pixels = try new u8[item.width * item.height * 4] in memory.heap
         defer free(pixels) in memory.heap
         ico.decode_rgba8(data, &item, pixels, options) catch failure:
-            discard(try out.write(f"{code_name(failure.code)}\n"))
+            _ = try out.write(f"{code_name(failure.code)}\n")
             continue
-        discard(try out.write("ok\n"))
+        _ = try out.write("ok\n")
         if not quiet:
             try write_output(directory, f"/{number}-{index}.rgba", pixels)
 
 ## Write `data` to the file `name` (formatted) in `directory`.
 func write_output(directory: str, name: fmt, data: const u8[]) -> !:
     var digits: u8[64]
-    let file = try format(digits, name)
+    let file = try strings.format(digits, name)
     var target = disk.Buffer()
     defer target.release()
     try target.add_all(directory.bytes)
@@ -99,6 +100,6 @@ pub func main(arguments: str[]) -> i32!:
     while let job = jobs.next():
         run_job(number, job, arguments[2]) catch failure:
             print(f"{number} error {code_name(failure.code)} {failure.message}")
-        discard(fflush(none))
+        _ = fflush(none)
         number += 1
     return 0

@@ -21,45 +21,45 @@ struct Icon:
     func data() -> const u8[]:
         return self.bytes[..<self.used]
 
-    mutating func add(byte: u8):
+    func add(byte: u8):
         self.bytes[self.used] = byte
         self.used += 1
 
-    mutating func add_all(data: const u8[]):
+    func add_all(data: const u8[]):
         for byte in data:
             self.add(byte)
 
-    mutating func word(value: usize):
+    func word(value: usize):
         self.add((u8)(value & 0xFF))
         self.add((u8)((value >> 8) & 0xFF))
 
-    mutating func long(value: usize):
+    func long(value: usize):
         self.word(value & 0xFFFF)
         self.word(value >> 16)
 
     ## Append `data` `count` times.
-    mutating func repeat(data: const u8[], count: usize):
+    func repeat(data: const u8[], count: usize):
         var left = count
         while left > 0:
             self.add_all(data)
             left -= 1
 
     ## Overwrite the little-endian 32-bit number at `at`.
-    mutating func put_long(at: usize, value: usize):
+    func put_long(at: usize, value: usize):
         self.bytes[at] = (u8)(value & 0xFF)
         self.bytes[at + 1] = (u8)((value >> 8) & 0xFF)
         self.bytes[at + 2] = (u8)((value >> 16) & 0xFF)
         self.bytes[at + 3] = (u8)((value >> 24) & 0xFF)
 
     ## The header: type 1 for an icon, 2 for a cursor.
-    mutating func header(kind: usize, count: usize):
+    func header(kind: usize, count: usize):
         self.word(0)
         self.word(kind)
         self.word(count)
 
     ## A directory entry; `planes` and `bits` are a cursor's hotspot x and y. Its size
     ## and offset are filled in by the image appended for it.
-    mutating func entry(width: u8, height: u8, planes: usize = 1, bits: usize = 32):
+    func entry(width: u8, height: u8, planes: usize = 1, bits: usize = 32):
         self.add(width)
         self.add(height)
         self.add(0)
@@ -70,17 +70,17 @@ struct Icon:
         self.long(0)
 
     ## Start entry `index`'s image here.
-    mutating func begin(index: usize):
+    func begin(index: usize):
         self.put_long(6 + index * 16 + 12, self.used)
 
     ## End entry `index`'s image here, recording its size.
-    mutating func end(index: usize):
+    func end(index: usize):
         let start = (usize)self.bytes[6 + index * 16 + 12] | ((usize)self.bytes[6 + index * 16 + 13] << 8)
         self.put_long(6 + index * 16 + 8, self.used - start)
 
     ## A 32-bit DIB for entry `index`: every pixel `blue`, `green`, `red` and `alpha`,
     ## every mask byte `mask`.
-    mutating func dib(index: usize, width: usize, height: usize, red: u8, green: u8, blue: u8, alpha: u8 = 0, mask: u8 = 0):
+    func dib(index: usize, width: usize, height: usize, red: u8, green: u8, blue: u8, alpha: u8 = 0, mask: u8 = 0):
         self.begin(index)
         self.long(40)
         self.long(width)
@@ -96,7 +96,7 @@ struct Icon:
 
     ## The head of a PNG for entry `index`: signature and IHDR, 8 bits a sample, colour
     ## type `color` (6 RGBA, 2 RGB).
-    mutating func png_head(index: usize, width: usize, height: usize, color: u8 = 6):
+    func png_head(index: usize, width: usize, height: usize, color: u8 = 6):
         self.begin(index)
         self.add_all(b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR")
         let sizes: usize[2] = [width, height]

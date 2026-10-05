@@ -83,7 +83,7 @@ func read_entry(data: const u8[], kind: Kind, index: usize) -> Entry:
             item.readable = listed(&item)
         return item
     let dib = bmp.info_dib(bytes, bmp.Options(icon = true)) catch failure:
-        discard(failure)
+        _ = failure
         return item
     item.width = dib.width
     item.height = dib.height

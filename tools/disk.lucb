@@ -25,12 +25,12 @@ pub struct Buffer:
     pub var used: usize = 0
 
     ## Append `data`.
-    pub mutating func add_all(data: const u8[]) -> !:
+    pub func add_all(data: const u8[]) -> !:
         if self.used + data.length > self.items.length:
             var size = 256 if self.items.length == 0 else self.items.length * 2
             while size < self.used + data.length:
                 size *= 2
-            let larger = try alloc u8[size] in memory.heap
+            let larger = try new u8[size] --- in memory.heap
             memory.copy(larger, self.items, self.used)
             if self.items.length > 0:
                 free(self.items) in memory.heap
@@ -43,7 +43,7 @@ pub struct Buffer:
         return self.items[..<self.used]
 
     ## Free the bytes; the buffer is empty afterwards.
-    pub mutating func release():
+    pub func release():
         if self.items.length > 0:
             free(self.items) in memory.heap
         var empty: u8[]
@@ -63,7 +63,7 @@ pub func read_file(path: str) -> u8[]?:
     defer name.release()
     let text = c_path(path, &name) else return none
     let file = fopen(text, "rb") else return none
-    defer discard(fclose(file))
+    defer _ = fclose(file)
     var contents = Buffer()
     defer contents.release()
     var chunk: u8[65536]
@@ -72,9 +72,9 @@ pub func read_file(path: str) -> u8[]?:
         if count == 0:
             break
         contents.add_all(chunk[..<count]) catch failure:
-            discard(failure)
+            _ = failure
             return none
-    let exact = (alloc u8[contents.used] in memory.heap) else return none
+    let exact = (new u8[contents.used] --- in memory.heap) else return none
     memory.copy(exact, contents.items, contents.used)
     return exact
 
@@ -84,8 +84,8 @@ pub func write_file(path: str, data: const u8[]) -> !:
     defer name.release()
     let file = fopen(try c_path(path, &name), "wb") else error(memory.exhausted, "cannot write a file")
     if data.length > 0:
-        discard(fwrite(&data[0], 1, data.length, file))
-    discard(fclose(file))
+        _ = fwrite(&data[0], 1, data.length, file)
+    _ = fclose(file)
 
 # mark: Job lists =============================================================================
 
@@ -100,11 +100,11 @@ pub struct Jobs:
     var at: usize = 0
 
     ## The jobs of `list`.
-    pub static func over(list: const u8[]) -> Jobs:
+    pub func over(list: const u8[]) -> Jobs:
         return Jobs(list = list)
 
     ## The next job, or none after the last.
-    pub mutating func next() -> Job?:
+    pub func next() -> Job?:
         while self.at < self.list.length:
             var end = self.at
             while end < self.list.length and self.list[end] != '\n':
