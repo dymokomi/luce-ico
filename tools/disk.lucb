@@ -100,7 +100,7 @@ pub struct Jobs:
     var at: usize = 0
 
     ## The jobs of `list`.
-    pub func over(list: const u8[]) -> Jobs:
+    pub static func over(list: const u8[]) -> Jobs:
         return Jobs(list = list)
 
     ## The next job, or none after the last.
