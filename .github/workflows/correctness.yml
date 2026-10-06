@@ -10,29 +10,20 @@ jobs:
       fail-fast: false
       matrix:
         runner: [macos-15, ubuntu-24.04]
-        base: [pinned, main]
     steps:
       - uses: actions/checkout@v7
         with:
           path: luce-ico
-      - id: pins
-        run: echo "base=$([ '${{ matrix.base }}' = main ] && echo main || cat luce-ico/bootstrap/BASE)" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v7
         with:
           repository: dymokomi/luce-base
-          ref: ${{ steps.pins.outputs.base }}
           path: luce-base
-      - name: Check out the pinned library packages
+      # every dependency at main, beside this checkout (luce-base docs/CI.md)
+      - name: Check out dependencies at main
         shell: bash
         working-directory: ${{ github.workspace }}
         run: |
-          while read -r name revision; do
-            revision=${revision%$'\r'}
-            [ -n "$name" ] || continue
-            git init -q "$name"
-            git -C "$name" fetch -q --depth 1 "https://github.com/dymokomi/$name.git" "$revision"
-            git -C "$name" checkout -q --detach FETCH_HEAD
-          done < luce-ico/bootstrap/PACKAGES
+          python3 luce-base/tools/checkout_main.py luce-ico
       - name: Select Clang
         run: |
           mkdir -p "$RUNNER_TEMP/luce-bin"
