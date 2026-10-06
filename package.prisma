@@ -10,7 +10,6 @@ def package "luce-ico" {
 
     def dependency "luce-bmp" {
         str owner = "dymokomi"
-        str version = "^0.3.0"
         str path = "../luce-bmp"
     }
 }
