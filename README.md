@@ -48,8 +48,8 @@ short keeps its whole entries; an image cut short decodes the rows it holds.
 ## Tests
 
 ```
-./test.sh                                   # unit tests, native and C, every compiler; -W, fmt
-LUCE_BASE_EXTRA=~/.local/bin/luce-base ./test.sh     # and a second toolchain
+luc test                                    # unit tests, and tests/tools: tools/icocheck builds
+tools/check.sh                              # lint: -W and fmt
 python3 tools/conformance.py --python VENV/bin/python --list-failing
 python3 tools/fuzz.py --cases 20000 [--guard-malloc]
 ```

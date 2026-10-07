@@ -1,0 +1,25 @@
+#==============================================================================================
+#
+#   tests/tools - The tools build
+#
+#   DESCRIPTION:
+#       Builds tools/icocheck.lucb, which tools/*.py drive, with the compiler `luc test` names
+#       (LUCE_BASE) into build/tests/tools, so a change to the module that breaks a tool
+#       fails the tests. The package has no luce-std, so the C library's `system` runs the
+#       compiler; its output goes straight to ours.
+#
+#==============================================================================================
+
+import c
+import platform
+
+extern func system(command: c.str) -> i32
+
+pub func main(arguments: str[]) -> i32:
+    let posix: c.str = "\"${LUCE_BASE:-luce-base}\" build tools/icocheck.lucb -o build/tests/tools/icocheck"
+    let windows: c.str = "\"%LUCE_BASE%\" build tools/icocheck.lucb -o build/tests/tools/icocheck.exe"
+    if system(windows if platform.windows else posix) != 0:
+        print("tools/icocheck.lucb does not build")
+        return 1
+    print("built tools/icocheck.lucb")
+    return 0
